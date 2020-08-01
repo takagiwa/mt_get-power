@@ -7,14 +7,22 @@ import time
 import binascii
 import os
 
+# Bルート認証ID（東京電力パワーグリッドから郵送で送られてくるヤツ）
 rbid = "00000000000000000000000000000000"
+# Bルート認証パスワード（東京電力パワーグリッドからメールで送られてくるヤツ）
 rbpwd = "XXXXXXXXXXXX"
-scanDuration = 4
+scanDuration = 4   # スキャン時間。サンプルでは6なんだけど、4でも行けるので。（ダメなら増やして再試行）
 retryLimit = 14 # up to 14
 measureInterval = 60 # in sec
 showResponse = True
+valueFileName = '/tmp/power'
 
-serialPortDev = '/dev/ttyUSB0'
+# シリアルポートデバイス名
+#serialPortDev = 'COM3'  # Windows の場合
+serialPortDev = '/dev/ttyUSB0'  # Linux(ラズパイなど）の場合
+#serialPortDev = '/dev/cu.usbserial-A103BTPR'    # Mac の場合
+
+# シリアルポート初期化
 ser = serial.Serial(serialPortDev, 115200)
 
 # Version
@@ -38,7 +46,7 @@ if showResponse:
 else:
   ser.readline()
 
-# Auth
+# Bルート認証パスワード設定
 ser.write(str.encode("SKSETPWD C " + rbpwd + "\r\n"))
 if showResponse :
   print("==== AUTH ====")
@@ -48,6 +56,7 @@ else :
   ser.readline()
   ser.readline()
 
+# Bルート認証ID設定
 ser.write(str.encode("SKSETRBID " + rbid + "\r\n"))
 if showResponse :
   print( ser.readline().strip().decode('utf-8') ) # echo back
@@ -58,10 +67,13 @@ else :
 
 if showResponse :
   print("==== SCAN ====")
-scanRes = {}
+scanRes = {} # スキャン結果の入れ物
 while not "Channel" in scanRes :
+  # アクティブスキャン（IE あり）を行う
+  # 時間かかります。10秒ぐらい？
   ser.write(str.encode("SKSCAN 2 FFFFFFFF " + str(scanDuration) + "\r\n"))
 
+  # スキャン1回について、スキャン終了までのループ
   scanEnd = False
   while not scanEnd :
     line = ser.readline().decode('utf-8')
@@ -69,16 +81,20 @@ while not "Channel" in scanRes :
       print(line, end="")
 
     if line.startswith("EVENT 22") :
+      # スキャン終わったよ（見つかったかどうかは関係なく）
       scanEnd = True
     elif line.startswith("  ") :
+      # スキャンして見つかったらスペース2個あけてデータがやってくる
       cols = line.strip().split(':')
       scanRes[cols[0]] = cols[1]
   scanDuration += 1
 
   if retryLimit < scanDuration and not "Channel" in scanRes :
+    # 引数としては14まで指定できるが、7で失敗したらそれ以上は無駄っぽい
     print("[ERROR] Scan retry over")
-    sys.exit()
+    sys.exit() #### 終了 ####
 
+# スキャン結果からChannelを設定。
 ser.write(str.encode("SKSREG S2 " + scanRes["Channel"] + "\r\n"))
 if showResponse :
   print("==== SET CHANNEL ====")
@@ -88,6 +104,7 @@ else :
   ser.readline()
   ser.readline()
 
+# スキャン結果からPan IDを設定
 ser.write(str.encode("SKSREG S3 " + scanRes["Pan ID"] + "\r\n"))
 if showResponse :
   print("==== SET PAN ID ====")
@@ -97,6 +114,8 @@ else :
   ser.readline()
   ser.readline()
 
+# MACアドレス(64bit)をIPV6リンクローカルアドレスに変換。
+# (BP35A1の機能を使って変換しているけど、単に文字列変換すればいいのではという話も？？)
 ser.write(str.encode("SKLL64 " + scanRes["Addr"] + "\r\n"))
 if showResponse :
   print("==== IPv6 ADDR ====")
@@ -107,6 +126,7 @@ ipv6Addr = ser.readline().strip().decode('utf-8')
 if showResponse :
   print(ipv6Addr)
 
+# PANA 接続シーケンスを開始します。
 ser.write(str.encode("SKJOIN " + ipv6Addr + "\r\n"))
 if showResponse :
   print("==== START CONNECT ====")
@@ -116,6 +136,7 @@ else :
   ser.readline()
   ser.readline()
 
+# PANA 接続完了待ち（10行ぐらいなんか返してくる）
 bConnected = False
 while not bConnected :
   line = ser.readline().decode('utf-8')
@@ -123,12 +144,16 @@ while not bConnected :
     print(line, end="")
   if line.startswith("EVENT 24") :
     print("[ERROR] Failed to connect.")
-    sys.exit()
+    sys.exit() #### 終了 ####
   elif line.startswith("EVENT 25") :
+    # 接続完了！
     bConnected = True
 
+# これ以降、シリアル通信のタイムアウトを設定
 ser.timeout = 2
 
+# スマートメーターがインスタンスリスト通知を投げてくる
+# (ECHONET-Lite_Ver.1.12_02.pdf p.4-16)
 if showResponse :
   print("==== INSTANCE LIST ====")
   print( ser.readline().strip().decode('utf-8') ) # instance list
@@ -139,6 +164,10 @@ else :
 
 
 while True :
+
+    # 改造箇所
+    # 二つのデータをリクエストしている。
+    # もうちょっとスマートにしよう。
     echonetLiteFrame = ""
     echonetLiteFrame += "\x10\x81"
     echonetLiteFrame += "\x00\x01"
@@ -153,6 +182,7 @@ while True :
     echonetLiteFrame += "\xD7"
     echonetLiteFrame += "\x00"
     command = "SKSENDTO 1 {0} 0E1A 1 {1:04X} ".format(ipv6Addr, len(echonetLiteFrame))
+    # コマンド送信
     ser.write(str.encode(command)+b'\x10\x81\x00\x01\x05\xFF\x01\x02\x88\x01\x62\x03\xD7\x00\xE1\x00\xE0\x00')
 
     if showResponse :
@@ -163,10 +193,13 @@ while True :
       ser.readline()
       ser.readline()
       ser.readline()
-    line = ser.readline()
+    line = ser.readline() # ERXUDPが来るはず
     if showResponse :
       print( line.strip().decode('utf-8') )
 
+    # 受信データはたまに違うデータが来たり、
+    # 取りこぼしたりして変なデータを拾うことがあるので
+    # チェックを厳しめにしてます。
     if line.decode('utf-8').startswith("ERXUDP") :
       cols = line.strip().decode('utf-8').split(' ')
       res = cols[8]
@@ -182,37 +215,8 @@ while True :
       if showResponse:
         print("TID: {0} / SEOJ: {1} / DEOJ: {2} / ESV: {3} / OPC: {4}".format(tid, seoj, deoj, ESV, OPC))
       if seoj == "028801" and ESV == "72" :
-        #EPC = res[24:24+2]
-        #if EPC == "82" :
-        #  hexData = line[-4:]
-        #  print("EPC: 0x82 / Data: {0}".format(hexData))
-        #elif EPC == "88" :
-        #  hexData = line[-1:]
-        #  print("EPC: 0x88 / Data: {0}".format(hexData))
-        #elif EPC == "8A" :
-        #  hexData = line[-3:]
-        #  print("EPC: 0x8A / Data: {0}".format(hexData))
-        #elif EPC == "80" :
-        #  hexData = line[-1:]
-        #  print("EPC: 0x80 / Data: {0}".format(hexdata))
-        #elif EPC == "D3" :
-        #  hexData = line[-4:]
-        #  print("EPC: 0xD3 / Data: {0}".format(hexData))
-        #elif EPC == "D7" :
-        #  hexData = line[-1:]
-        #  print("EPC: 0xD7 / Data: {0}".format(hexData))
-        #elif EPC == "E0" :
-        #  hexData = line[-8:]
-        #  print("EPC: 0xE0 / Data: {0}".format(hexData))
-        #elif EPC == "E1" :
-        #  hexData = line[-8:]
-        #  print("EPC: 0xE1 / Data: {0}".format(hexData))
-        #elif EPC == "E7" :
-        #  hexPower = line[-8:]
-        #  intPower = int(hexPower, 16)
-        #  print("Power:{0}[W]".format(intPower))
 
-        # D7
+        # D7 = 有効桁数
         epc1 = res[24:24+2]
         pdc1 = res[26:26+2]
         edt1 = res[28:28+2]
@@ -220,7 +224,8 @@ while True :
         if showResponse:
           print("{0} / {1} / {2}".format(epc1, pdc1, edt1))
           print("sigdigit: {0}".format(sigdigit))
-        # E1
+
+        # E1 = 単位
         epc2 = res[30:30+2]
         pdc2 = res[32:32+2]
         edt2 = res[34:34+2]
@@ -245,41 +250,47 @@ while True :
           unitnum = 10000.0
         if showResponse:
           print("{0} / {1} / {2}".format(epc2, pdc2, edt2))
-        # E0
+
+        # E0 = 積算電力
         epc3 = res[36:36+2]
         pdc3 = res[38:38+2]
         edt3 = res[40:40+8]
         pow_base = int(edt3, 16)
         if showResponse:
           print("{0} / {1} / {2}".format(epc3, pdc3, edt3))
+
+        # 積算電力をW単位で。小数点が入ると
+        # munin のグラフの type の COUNTER や DERIVE がエラーになる。
         f_power = pow_base * unitnum
         i_power = int(f_power * 1000)
         if showResponse:
           print("power: {0} [kW]".format(f_power))
         if True:
-          # make & write
-          fn = '/tmp.bak/power.new'
+          # 新しいファイルを作成し・・・
+          fn = valueFileName + '.new'
           f = open(fn, 'w')
-          #s = '%f\n' % f_power
           s = '%d\n' % i_power
           f.write(s)
           f.flush()
           os.fsync(f.fileno())
           f.close
 
-          # move new & old
+          # 前のファイルの .bak へのリネームと
+          # 新しいファイルの無印へのリネームを
+          # 一気に実行
           mv = ''
-          fn = '/tmp.bak/power'
+          fn = valueFileName
           if os.path.exists(fn):
-            mv = 'mv /tmp.bak/power /tmp.bak/power.bak &&'
-          cmd = '%s mv /tmp.bak/power.new /tmp.bak/power' % mv
+            mv = 'mv ' + valueFileName + ' ' + valueFileName + '.bak &&'
+          cmd = '%s mv ' % mv
+          cmd += valueFileName + '.new ' + valueFileName
           os.system(cmd)
 
       time.sleep(measureInterval)
 
       if True:
-        # remove previous
-        fn = '/tmp.bak/power.bak'
+        # 前のファイルを削除
+        fn = valueFileName + '.bak'
         if os.path.exists(fn):
           os.remove(fn)
 
