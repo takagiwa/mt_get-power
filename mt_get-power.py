@@ -31,11 +31,13 @@ while True:
   if showResponse:
     print("==== VERSION ====")
   ser.write(str.encode("SKVER\r\n"))
+  ser.flush()
+  time.sleep(1)
   if showResponse:
-    print( ser.readline().strip().decode('utf-8') ) # echo back
+    print( ser.read_until().strip().decode('utf-8') ) # echo back
   else:
-    ser.readline()
-  line = ser.readline().strip().decode('utf-8')
+    ser.read_until()
+  line = ser.read_until().strip().decode('utf-8')
   if line.startswith("FAIL"):
     if showResponse:
       print(line)
@@ -46,41 +48,49 @@ while True:
   if showResponse:
     print( line )
   if showResponse:
-    print( ser.readline().strip().decode('utf-8') ) # ok
+    print( ser.read_until().strip().decode('utf-8') ) # ok
   else:
-    ser.readline()
+    ser.read_until()
+  line = ''
 
   # Bルート認証パスワード設定
   ser.write(str.encode("SKSETPWD C " + rbpwd + "\r\n"))
+  ser.flush()
+  time.sleep(1)
   if showResponse :
     print("==== AUTH ====")
-    print( ser.readline().strip().decode('utf-8') ) # echo back
-    print( ser.readline().strip().decode('utf-8') ) # ok
+    print( ser.read_until().strip().decode('utf-8') ) # echo back
+    print( ser.read_until().strip().decode('utf-8') ) # ok
   else :
-    ser.readline()
-    ser.readline()
+    ser.read_until()
+    ser.read_until()
 
   # Bルート認証ID設定
   ser.write(str.encode("SKSETRBID " + rbid + "\r\n"))
+  ser.flush()
+  time.sleep(1)
   if showResponse :
-    print( ser.readline().strip().decode('utf-8') ) # echo back
-    print( ser.readline().strip().decode('utf-8') ) # ok
+    print( ser.read_until().strip().decode('utf-8') ) # echo back
+    print( ser.read_until().strip().decode('utf-8') ) # ok
   else :
-    ser.readline()
-    ser.readline()
+    ser.read_until()
+    ser.read_until()
 
   if showResponse :
     print("==== SCAN ====")
   scanRes = {} # スキャン結果の入れ物
   while not "Channel" in scanRes :
+    line = ''
     # アクティブスキャン（IE あり）を行う
     # 時間かかります。10秒ぐらい？
     ser.write(str.encode("SKSCAN 2 FFFFFFFF " + str(scanDuration) + "\r\n"))
+    ser.flush()
+    time.sleep(1)
 
     # スキャン1回について、スキャン終了までのループ
     scanEnd = False
     while not scanEnd :
-      line = ser.readline().decode('utf-8')
+      line = ser.read_until().decode('utf-8')
       if showResponse:
         print(line, end="")
 
@@ -98,52 +108,62 @@ while True:
       print("[ERROR] Scan retry over")
       sys.exit() #### 終了 ####
 
+  line = ''
+
   # スキャン結果からChannelを設定。
   ser.write(str.encode("SKSREG S2 " + scanRes["Channel"] + "\r\n"))
+  ser.flush()
+  time.sleep(1)
   if showResponse :
     print("==== SET CHANNEL ====")
-    print( ser.readline().strip().decode('utf-8') ) # echo back
-    print( ser.readline().strip().decode('utf-8') ) # ok
+    print( ser.read_until().strip().decode('utf-8') ) # echo back
+    print( ser.read_until().strip().decode('utf-8') ) # ok
   else :
-    ser.readline()
-    ser.readline()
+    ser.read_until()
+    ser.read_until()
 
   # スキャン結果からPan IDを設定
   ser.write(str.encode("SKSREG S3 " + scanRes["Pan ID"] + "\r\n"))
+  ser.flush()
+  time.sleep(1)
   if showResponse :
     print("==== SET PAN ID ====")
-    print( ser.readline().strip().decode('utf-8') ) # echo back
-    print( ser.readline().strip().decode('utf-8') ) # ok
+    print( ser.read_until().strip().decode('utf-8') ) # echo back
+    print( ser.read_until().strip().decode('utf-8') ) # ok
   else :
-    ser.readline()
-    ser.readline()
+    ser.read_until()
+    ser.read_until()
 
   # MACアドレス(64bit)をIPV6リンクローカルアドレスに変換。
   # (BP35A1の機能を使って変換しているけど、単に文字列変換すればいいのではという話も？？)
   ser.write(str.encode("SKLL64 " + scanRes["Addr"] + "\r\n"))
+  ser.flush()
+  time.sleep(1)
   if showResponse :
     print("==== IPv6 ADDR ====")
-    print( ser.readline().strip().decode('utf-8') ) # echo back
+    print( ser.read_until().strip().decode('utf-8') ) # echo back
   else :
-    ser.readline()
-  ipv6Addr = ser.readline().strip().decode('utf-8')
+    ser.read_until()
+  ipv6Addr = ser.read_until().strip().decode('utf-8')
   if showResponse :
     print(ipv6Addr)
 
   # PANA 接続シーケンスを開始します。
   ser.write(str.encode("SKJOIN " + ipv6Addr + "\r\n"))
+  ser.flush()
+  time.sleep(1)
   if showResponse :
     print("==== START CONNECT ====")
-    print( ser.readline().strip().decode('utf-8') ) # echo back
-    print( ser.readline().strip().decode('utf-8') ) # ok
+    print( ser.read_until().strip().decode('utf-8') ) # echo back
+    print( ser.read_until().strip().decode('utf-8') ) # ok
   else :
-    ser.readline()
-    ser.readline()
+    ser.read_until()
+    ser.read_until()
 
   # PANA 接続完了待ち（10行ぐらいなんか返してくる）
   bConnected = False
   while not bConnected :
-    line = ser.readline().decode('utf-8')
+    line = ser.read_until().decode('utf-8')
     if showResponse :
       print(line, end="")
     if line.startswith("EVENT 24") :
@@ -162,11 +182,11 @@ while True:
   # (ECHONET-Lite_Ver.1.12_02.pdf p.4-16)
   if showResponse :
     print("==== INSTANCE LIST ====")
-    print( ser.readline().strip().decode('utf-8') ) # instance list
-    print( ser.readline().strip().decode('utf-8') ) # add
+    print( ser.read_until().strip().decode('utf-8') ) # instance list
+    print( ser.read_until().strip().decode('utf-8') ) # add
   else :
-    ser.readline()
-    ser.readline()
+    ser.read_until()
+    ser.read_until()
 
   while True :
 
@@ -189,6 +209,8 @@ while True:
       command = "SKSENDTO 1 {0} 0E1A 1 {1:04X} ".format(ipv6Addr, len(echonetLiteFrame))
       # コマンド送信
       ser.write(str.encode(command)+b'\x10\x81\x00\x01\x05\xFF\x01\x02\x88\x01\x62\x03\xD7\x00\xE1\x00\xE0\x00')
+      ser.flush()
+      time.sleep(1)
 
       # 失敗したときの例
       # SKSENDTO ...
@@ -199,10 +221,11 @@ while True:
       # ERXUDP ...
       # (大量の空行)
 
-      l_echo = ser.readline().strip().decode('utf-8') # echo
-      l_event = ser.readline().strip().decode('utf-8') # event 21
-      l_ok = ser.readline().strip().decode('utf-8') # ok
-      line = ser.readline() # ERXUDPが来るはず
+      l_echo = ser.read_until().strip().decode('utf-8') # echo
+      l_event = ser.read_until().strip().decode('utf-8') # event 21
+      l_ok = ser.read_until().strip().decode('utf-8') # ok
+      line = ''
+      line = ser.read_until() # ERXUDPが来るはず
       if showResponse :
         print(l_echo)
         print(l_event)
@@ -218,6 +241,13 @@ while True:
       if e > 0:
         if showResponse:
           print("Something wrong")
+
+          # dummy
+          print( ser.read_until().strip().decode('utf-8') )
+          print( ser.read_until().strip().decode('utf-8') )
+          print( ser.read_until().strip().decode('utf-8') )
+          
+          print("")
           time.sleep(waitAfterFailure)
           break;
 
@@ -226,7 +256,13 @@ while True:
       # チェックを厳しめにしてます。
       if line.decode('utf-8').startswith("ERXUDP") :
         cols = line.strip().decode('utf-8').split(' ')
+        if len(cols) < 8:
+          time.sleep(3)
+          break
         res = cols[8]
+        if len(res) < 48:
+          time.sleep(3)
+          break
 
         # https://www.meti.go.jp/committee/kenkyukai/shoujo/smart_house/pdf/009_s03_00.pdf
         # page 35
@@ -317,5 +353,9 @@ while True:
           fn = valueFileName + '.bak'
           if os.path.exists(fn):
             os.remove(fn)
+
+      ser.reset_input_buffer()
+
+  ser.reset_input_buffer()
 
 ser.close()
