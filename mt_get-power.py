@@ -6,6 +6,7 @@ import serial
 import time
 import binascii
 import os
+import logging
 
 # Bルート認証ID（東京電力パワーグリッドから郵送で送られてくるヤツ）
 rbid = "00000000000000000000000000000000"
@@ -16,179 +17,182 @@ retryLimit = 14 # up to 14
 measureInterval = 60 # in sec
 showResponse = True
 valueFileName = '/tmp/power'
-waitAfterFailure = 3*60 # in sec
+waitBase = 5*60
+waitInc = 3*60
+breakLimit = 5
+
+logging.basicConfig(level=logging.INFO)
+waitAfterFailure = waitBase
+breakCount = 0
 
 # シリアルポートデバイス名
 serialPortDev = '/dev/ttyUSB0'  # Linux(ラズパイなど）の場合
 #serialPortDev = '/dev/cu.usbserial-A103BTPR'    # Mac の場合
 
-# シリアルポート初期化
-ser = serial.Serial(serialPortDev, 115200)
-
 while True:
 
-  # Version
-  if showResponse:
-    print("==== VERSION ====")
-  ser.write(str.encode("SKVER\r\n"))
-  ser.flush()
-  time.sleep(1)
-  if showResponse:
-    print( ser.read_until().strip().decode('utf-8') ) # echo back
-  else:
-    ser.read_until()
-  line = ser.read_until().strip().decode('utf-8')
-  if line.startswith("FAIL"):
-    if showResponse:
-      print(line)
-      print("[ERROR] Something wrong.")
-      #sys.exit()
-      time.sleep(waitAfterFailure)
-      continue
-  if showResponse:
-    print( line )
-  if showResponse:
-    print( ser.read_until().strip().decode('utf-8') ) # ok
-  else:
-    ser.read_until()
-  line = ''
+  # シリアルポート初期化
+  ser = serial.Serial(serialPortDev, 115200)
 
-  # Bルート認証パスワード設定
-  ser.write(str.encode("SKSETPWD C " + rbpwd + "\r\n"))
-  ser.flush()
-  time.sleep(1)
-  if showResponse :
-    print("==== AUTH ====")
-    print( ser.read_until().strip().decode('utf-8') ) # echo back
-    print( ser.read_until().strip().decode('utf-8') ) # ok
-  else :
-    ser.read_until()
-    ser.read_until()
+  while True:
 
-  # Bルート認証ID設定
-  ser.write(str.encode("SKSETRBID " + rbid + "\r\n"))
-  ser.flush()
-  time.sleep(1)
-  if showResponse :
-    print( ser.read_until().strip().decode('utf-8') ) # echo back
-    print( ser.read_until().strip().decode('utf-8') ) # ok
-  else :
-    ser.read_until()
-    ser.read_until()
-
-  if showResponse :
-    print("==== SCAN ====")
-  scanRes = {} # スキャン結果の入れ物
-  while not "Channel" in scanRes :
-    line = ''
-    # アクティブスキャン（IE あり）を行う
-    # 時間かかります。10秒ぐらい？
-    ser.write(str.encode("SKSCAN 2 FFFFFFFF " + str(scanDuration) + "\r\n"))
+    # Version
+    logging.info("==== VERSION ====")
+    ser.write(str.encode("SKVER\r\n"))
     ser.flush()
     time.sleep(1)
-
-    # スキャン1回について、スキャン終了までのループ
-    scanEnd = False
-    while not scanEnd :
-      line = ser.read_until().decode('utf-8')
-      if showResponse:
-        print(line, end="")
-
-      if line.startswith("EVENT 22") :
-        # スキャン終わったよ（見つかったかどうかは関係なく）
-        scanEnd = True
-      elif line.startswith("  ") :
-        # スキャンして見つかったらスペース2個あけてデータがやってくる
-        cols = line.strip().split(':')
-        scanRes[cols[0]] = cols[1]
-    scanDuration += 1
-
-    if retryLimit < scanDuration and not "Channel" in scanRes :
-      # 引数としては14まで指定できるが、7で失敗したらそれ以上は無駄っぽい
-      print("[ERROR] Scan retry over")
-      sys.exit() #### 終了 ####
-
-  line = ''
-
-  # スキャン結果からChannelを設定。
-  ser.write(str.encode("SKSREG S2 " + scanRes["Channel"] + "\r\n"))
-  ser.flush()
-  time.sleep(1)
-  if showResponse :
-    print("==== SET CHANNEL ====")
-    print( ser.read_until().strip().decode('utf-8') ) # echo back
-    print( ser.read_until().strip().decode('utf-8') ) # ok
-  else :
-    ser.read_until()
-    ser.read_until()
-
-  # スキャン結果からPan IDを設定
-  ser.write(str.encode("SKSREG S3 " + scanRes["Pan ID"] + "\r\n"))
-  ser.flush()
-  time.sleep(1)
-  if showResponse :
-    print("==== SET PAN ID ====")
-    print( ser.read_until().strip().decode('utf-8') ) # echo back
-    print( ser.read_until().strip().decode('utf-8') ) # ok
-  else :
-    ser.read_until()
-    ser.read_until()
-
-  # MACアドレス(64bit)をIPV6リンクローカルアドレスに変換。
-  # (BP35A1の機能を使って変換しているけど、単に文字列変換すればいいのではという話も？？)
-  ser.write(str.encode("SKLL64 " + scanRes["Addr"] + "\r\n"))
-  ser.flush()
-  time.sleep(1)
-  if showResponse :
-    print("==== IPv6 ADDR ====")
-    print( ser.read_until().strip().decode('utf-8') ) # echo back
-  else :
-    ser.read_until()
-  ipv6Addr = ser.read_until().strip().decode('utf-8')
-  if showResponse :
-    print(ipv6Addr)
-
-  # PANA 接続シーケンスを開始します。
-  ser.write(str.encode("SKJOIN " + ipv6Addr + "\r\n"))
-  ser.flush()
-  time.sleep(1)
-  if showResponse :
-    print("==== START CONNECT ====")
-    print( ser.read_until().strip().decode('utf-8') ) # echo back
-    print( ser.read_until().strip().decode('utf-8') ) # ok
-  else :
-    ser.read_until()
-    ser.read_until()
-
-  # PANA 接続完了待ち（10行ぐらいなんか返してくる）
-  bConnected = False
-  while not bConnected :
-    line = ser.read_until().decode('utf-8')
-    if showResponse :
-      print(line, end="")
-    if line.startswith("EVENT 24") :
-      print("[ERROR] Failed to connect.")
-      #sys.exit() #### 終了 ####
+    logging.info(ser.read_until().strip().decode('utf-8')) # echo back
+    line = ser.read_until().strip().decode('utf-8')
+    if line.startswith("FAIL"):
+      logging.error(line)
+      logging.error("[ERROR] Something wrong.")
+      #sys.exit()
+      if (breakCount >= breakLimit):
+        break;
       time.sleep(waitAfterFailure)
+      waitAfterFailure += waitInc
+      breakCount += 1
       continue
-    elif line.startswith("EVENT 25") :
-      # 接続完了！
-      bConnected = True
+    logging.info(line)
+    logging.info(ser.read_until().strip().decode('utf-8')) # ok
+    line = ''
 
-  # これ以降、シリアル通信のタイムアウトを設定
-  ser.timeout = 2
+    waitAfterFailure = waitBase
+    breakCount = 0
 
-  # スマートメーターがインスタンスリスト通知を投げてくる
-  # (ECHONET-Lite_Ver.1.12_02.pdf p.4-16)
-  if showResponse :
-    print("==== INSTANCE LIST ====")
-    print( ser.read_until().strip().decode('utf-8') ) # instance list
-    print( ser.read_until().strip().decode('utf-8') ) # add
-  else :
-    ser.read_until()
-    ser.read_until()
+    # Bルート認証パスワード設定
+    logging.info("==== AUTH ====")
+    ser.write(str.encode("SKSETPWD C " + rbpwd + "\r\n"))
+    ser.flush()
+    time.sleep(1)
+    logging.info(ser.read_until().strip().decode('utf-8')) # echo back
+    logging.info(ser.read_until().strip().decode('utf-8')) # ok
 
-  while True :
+    # Bルート認証ID設定
+    ser.write(str.encode("SKSETRBID " + rbid + "\r\n"))
+    ser.flush()
+    time.sleep(1)
+    logging.info(ser.read_until().strip().decode('utf-8')) # echo back
+    logging.info(ser.read_until().strip().decode('utf-8')) # ok
+
+    logging.info("==== SCAN ====")
+    scanRes = {} # スキャン結果の入れ物
+    while not "Channel" in scanRes :
+      line = ''
+      # アクティブスキャン（IE あり）を行う
+      # 時間かかります。10秒ぐらい？
+      ser.write(str.encode("SKSCAN 2 FFFFFFFF " + str(scanDuration) + "\r\n"))
+      ser.flush()
+      time.sleep(1)
+
+      # スキャン1回について、スキャン終了までのループ
+      scanEnd = False
+      while not scanEnd :
+        line = ser.read_until().decode('utf-8')
+        logging.info(line)
+
+        if line.startswith("EVENT 22") :
+          # スキャン終わったよ（見つかったかどうかは関係なく）
+          scanEnd = True
+        elif line.startswith("  ") :
+          # スキャンして見つかったらスペース2個あけてデータがやってくる
+          cols = line.strip().split(':')
+          scanRes[cols[0]] = cols[1]
+        elif line.startswith("FAIL") :
+          time.sleep(waitAfterFailure)
+          waitAfterFailure += waitInc
+          breakCount += 1
+          break
+
+      if breakCount > 0:
+        break;
+
+      scanDuration += 1
+
+      if retryLimit < scanDuration and not "Channel" in scanRes :
+        # 引数としては14まで指定できるが、7で失敗したらそれ以上は無駄っぽい
+        logging.error("[ERROR] Scan retry over")
+        sys.exit() #### 終了 ####
+
+    if breakCount >= breakLimit:
+      logging.warning("[WARNING] Scan retry over")
+      break
+    if breakCount > 0:
+      continue
+
+    line = ''
+    waitAfterFailure = waitBase
+    breakCount = 0
+
+    # スキャン結果からChannelを設定。
+    logging.info("==== SET CHANNEL ====")
+    ser.write(str.encode("SKSREG S2 " + scanRes["Channel"] + "\r\n"))
+    ser.flush()
+    time.sleep(1)
+    logging.info(ser.read_until().strip().decode('utf-8')) # echo back
+    logging.info(ser.read_until().strip().decode('utf-8')) # ok
+
+    # スキャン結果からPan IDを設定
+    logging.info("==== SET PAN ID ====")
+    ser.write(str.encode("SKSREG S3 " + scanRes["Pan ID"] + "\r\n"))
+    ser.flush()
+    time.sleep(1)
+    logging.info(ser.read_until().strip().decode('utf-8')) # echo back
+    logging.info(ser.read_until().strip().decode('utf-8')) # ok
+
+    # MACアドレス(64bit)をIPV6リンクローカルアドレスに変換。
+    # (BP35A1の機能を使って変換しているけど、単に文字列変換すればいいのではという話も？？)
+    logging.info("==== IPv6 ADDR ====")
+    ser.write(str.encode("SKLL64 " + scanRes["Addr"] + "\r\n"))
+    ser.flush()
+    time.sleep(1)
+    logging.info(ser.read_until().strip().decode('utf-8')) # echo back
+    ipv6Addr = ser.read_until().strip().decode('utf-8')
+    logging.info(ipv6Addr)
+
+    # PANA 接続シーケンスを開始します。
+    logging.info("==== START CONNECT ====")
+    ser.write(str.encode("SKJOIN " + ipv6Addr + "\r\n"))
+    ser.flush()
+    time.sleep(1)
+    logging.info(ser.read_until().strip().decode('utf-8')) # echo back
+    logging.info(ser.read_until().strip().decode('utf-8')) # ok
+
+    # PANA 接続完了待ち（10行ぐらいなんか返してくる）
+    bConnected = False
+    while not bConnected :
+      line = ser.read_until().decode('utf-8')
+      logging.info(line)
+      if line.startswith("EVENT 24") :
+        logging.error("[ERROR] Failed to connect.")
+        #sys.exit() #### 終了 ####
+        if breakCount >= breakLimit:
+          break
+        time.sleep(waitAfterFailure)
+        waitAfterFailure += waitInc
+        breakCount += 1
+        continue
+      elif line.startswith("EVENT 25") :
+        # 接続完了！
+        bConnected = True
+
+    if breakCount >= breakLimit:
+      logging.warning("[WARNING] Connection retry over")
+      break
+
+    # これ以降、シリアル通信のタイムアウトを設定
+    ser.timeout = 2
+
+    waitAfterFailure = waitBase
+    breakCount = 0
+
+    # スマートメーターがインスタンスリスト通知を投げてくる
+    # (ECHONET-Lite_Ver.1.12_02.pdf p.4-16)
+    logging.info("==== INSTANCE LIST ====")
+    logging.info(ser.read_until().strip().decode('utf-8')) # instance list
+    logging.info(ser.read_until().strip().decode('utf-8')) # add
+
+    while True :
 
       # 改造箇所
       # 二つのデータをリクエストしている。
@@ -226,11 +230,10 @@ while True:
       l_ok = ser.read_until().strip().decode('utf-8') # ok
       line = ''
       line = ser.read_until() # ERXUDPが来るはず
-      if showResponse :
-        print(l_echo)
-        print(l_event)
-        print(l_ok)
-        print(line.strip().decode('utf-8'))
+      logging.info(l_echo)
+      logging.info(l_event)
+      logging.info(l_ok)
+      logging.info(line.strip().decode('utf-8'))
       e = 0;
       if not "SKSENDTO" in l_echo:
         e += 1
@@ -239,28 +242,28 @@ while True:
       if not "OK" in l_ok:
         e += 1
       if e > 0:
-        if showResponse:
-          print("Something wrong")
-
-          # dummy
-          print( ser.read_until().strip().decode('utf-8') )
-          print( ser.read_until().strip().decode('utf-8') )
-          print( ser.read_until().strip().decode('utf-8') )
-          
-          print("")
-          time.sleep(waitAfterFailure)
-          break;
+        logging.error("Something wrong")
+        logging.error(ser.read_until().strip().decode('utf-8'))
+        logging.error(ser.read_until().strip().decode('utf-8'))
+        logging.error(ser.read_until().strip().decode('utf-8'))
+        logging.error("-")
+        if breakCount >= breakLimit:
+          break
+        time.sleep(waitAfterFailure)
+        waitAfterFailure += waitInc
+        breakCount += 1
+        break;
 
       # 受信データはたまに違うデータが来たり、
       # 取りこぼしたりして変なデータを拾うことがあるので
       # チェックを厳しめにしてます。
       if line.decode('utf-8').startswith("ERXUDP") :
         cols = line.strip().decode('utf-8').split(' ')
-        if len(cols) < 8:
+        if len(cols) < 9:
           time.sleep(3)
           break
         res = cols[8]
-        if len(res) < 48:
+        if len(res) < 48: # 49?
           time.sleep(3)
           break
 
@@ -272,8 +275,9 @@ while True:
         deoj = res[14:14+6]
         ESV = res[20:20+2]
         OPC = res[22:22+2]
-        if showResponse:
-          print("TID: {0} / SEOJ: {1} / DEOJ: {2} / ESV: {3} / OPC: {4}".format(tid, seoj, deoj, ESV, OPC))
+        #if showResponse:
+        #  print("TID: {0} / SEOJ: {1} / DEOJ: {2} / ESV: {3} / OPC: {4}".format(tid, seoj, deoj, ESV, OPC))
+        logging.info("TID: {0} / SEOJ: {1} / DEOJ: {2} / ESV: {3} / OPC: {4}".format(tid, seoj, deoj, ESV, OPC))
         if seoj == "028801" and ESV == "72" :
 
           # D7 = 有効桁数
@@ -281,9 +285,11 @@ while True:
           pdc1 = res[26:26+2]
           edt1 = res[28:28+2]
           sigdigit = int(edt1, 16)
-          if showResponse:
-            print("{0} / {1} / {2}".format(epc1, pdc1, edt1))
-            print("sigdigit: {0}".format(sigdigit))
+          #if showResponse:
+          #  print("{0} / {1} / {2}".format(epc1, pdc1, edt1))
+          #  print("sigdigit: {0}".format(sigdigit))
+          logging.info("{0} / {1} / {2}".format(epc1, pdc1, edt1))
+          logging.info("sigdigit: {0}".format(sigdigit))
 
           # E1 = 単位
           epc2 = res[30:30+2]
@@ -308,23 +314,26 @@ while True:
             unitnum = 1000.0
           elif edt2 == "0D":
             unitnum = 10000.0
-          if showResponse:
-            print("{0} / {1} / {2}".format(epc2, pdc2, edt2))
+          #if showResponse:
+          #  print("{0} / {1} / {2}".format(epc2, pdc2, edt2))
+          logging.info("{0} / {1} / {2}".format(epc2, pdc2, edt2))
 
           # E0 = 積算電力
           epc3 = res[36:36+2]
           pdc3 = res[38:38+2]
           edt3 = res[40:40+8]
           pow_base = int(edt3, 16)
-          if showResponse:
-            print("{0} / {1} / {2}".format(epc3, pdc3, edt3))
+          #if showResponse:
+          #  print("{0} / {1} / {2}".format(epc3, pdc3, edt3))
+          logging.info("{0} / {1} / {2}".format(epc3, pdc3, edt3))
 
           # 積算電力をW単位で。小数点が入ると
           # munin のグラフの type の COUNTER や DERIVE がエラーになる。
           f_power = pow_base * unitnum
           i_power = int(f_power * 1000)
-          if showResponse:
-            print("power: {0} [kW]".format(f_power))
+          #if showResponse:
+          #  print("power: {0} [kW]".format(f_power))
+          logging.info("power: {0} [kW]".format(f_power))
           if True:
             # 新しいファイルを作成し・・・
             fn = valueFileName + '.new'
@@ -354,8 +363,15 @@ while True:
           if os.path.exists(fn):
             os.remove(fn)
 
+        waitAfterFailure = waitBase
+
       ser.reset_input_buffer()
 
-  ser.reset_input_buffer()
+    ser.reset_input_buffer()
 
-ser.close()
+    if breakCount >= breakLimit:
+      break
+
+  ser.close()
+  logging.warning("[WARNING] Disconnect serial port for retry")
+  time.sleep(waitAfterFailure)
